@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # --- Database ---
     # Override with postgresql+psycopg2://... in production / docker
-    database_url: str = "sqlite:///./synapticgrip.db"
+    database_url: str = "sqlite:///./cybernetic.db"
 
     # --- Redis / Celery ---
     redis_url: str = "redis://localhost:6379/0"

@@ -54,8 +54,8 @@ export default function NewResearchForm({ onSubmitted }: Props) {
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       {/* Query */}
       <div>
-        <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-          Research question <span className="text-cyan-400">*</span>
+        <label className="block text-xs font-medium text-gray-600 mb-1.5">
+          Research question <span className="text-cyan-600">*</span>
         </label>
         <textarea
           value={query}
@@ -63,15 +63,15 @@ export default function NewResearchForm({ onSubmitted }: Props) {
           placeholder="What do you want to research? Be specific — the agents work best with a clear question."
           rows={4}
           required
-          className="w-full resize-none rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+          className="w-full resize-none rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 placeholder-gray-400 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
         />
       </div>
 
       {/* Title + max results row */}
       <div className="flex gap-3">
         <div className="flex-1">
-          <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-            Title <span className="text-zinc-600">(auto-filled if blank)</span>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">
+            Title <span className="text-gray-400">(auto-filled if blank)</span>
           </label>
           <input
             type="text"
@@ -79,18 +79,16 @@ export default function NewResearchForm({ onSubmitted }: Props) {
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Short display name"
             maxLength={100}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800/60 px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+            className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
           />
         </div>
 
         <div className="w-28">
-          <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-            Sources
-          </label>
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">Sources</label>
           <select
             value={maxResults}
             onChange={(e) => setMaxResults(Number(e.target.value))}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
           >
             {[3, 5, 8, 10].map((n) => (
               <option key={n} value={n}>{n}</option>
@@ -101,7 +99,7 @@ export default function NewResearchForm({ onSubmitted }: Props) {
 
       {/* Error */}
       {error && (
-        <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           {error}
         </p>
       )}
@@ -110,7 +108,7 @@ export default function NewResearchForm({ onSubmitted }: Props) {
       <button
         type="submit"
         disabled={submitting || !query.trim()}
-        className="flex items-center justify-center gap-2 rounded-lg bg-cyan-500 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {submitting ? (
           <>

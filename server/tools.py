@@ -95,8 +95,8 @@ async def extract_page_content(url: str) -> str:
             follow_redirects=True,
             headers={
                 "User-Agent": (
-                    "SynapseGrip-Research-Bot/1.0 "
-                    "(+https://github.com/your-org/synapse-grip)"
+                    "Cybernetic-Research-Bot/1.0 "
+                    "(+https://github.com/your-org/cybernetic)"
                 )
             },
         ) as client:

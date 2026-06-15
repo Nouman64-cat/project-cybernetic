@@ -1,5 +1,5 @@
 """
-SynapseGrip — FastAPI application entry point.
+Cybernetic — FastAPI application entry point.
 
 Responsibilities of this module (and ONLY this module):
   - Compose the FastAPI app instance.
@@ -75,11 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
       - No explicit teardown needed for SQLite/single-process deployments.
         Add connection pool draining here when migrating to PostgreSQL.
     """
-    logger.info("SynapseGrip API starting up...")
+    logger.info("Cybernetic API starting up...")
     create_db_and_tables()
     logger.info("Database ready.")
     yield
-    logger.info("SynapseGrip API shutting down.")
+    logger.info("Cybernetic API shutting down.")
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="SynapseGrip Research API",
+    title="Cybernetic Research API",
     description=(
         "Deep research platform powered by a two-agent AutoGen pipeline "
         "(ResearcherAgent + SynthesizerAgent). Accepts natural-language research "
@@ -126,4 +126,4 @@ app.include_router(research_router)
 @app.get("/health", tags=["meta"], summary="Liveness probe")
 async def health_check() -> dict[str, str]:
     """Returns 200 OK when the service is running.  Used by load balancers and CI."""
-    return {"status": "ok", "service": "SynapseGrip API", "version": "0.1.0"}
+    return {"status": "ok", "service": "Cybernetic API", "version": "0.1.0"}

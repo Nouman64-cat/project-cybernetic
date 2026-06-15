@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'SynapseGrip — Deep Research Intelligence',
+  title: 'Cybernetic — Deep Research Intelligence',
   description: 'Multi-agent research platform powered by AutoGen',
 };
 

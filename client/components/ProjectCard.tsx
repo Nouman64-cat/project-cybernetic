@@ -25,44 +25,43 @@ export default function ProjectCard({ project, onViewReport }: Props) {
 
   return (
     <div
-      className={`group relative rounded-xl border bg-zinc-900 p-4 transition-all ${
+      className={`group relative rounded-xl border bg-white p-4 transition-all shadow-sm ${
         isActive
-          ? 'border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.08)]'
+          ? 'border-cyan-300 shadow-cyan-100 shadow-md'
           : status === 'completed'
-          ? 'border-zinc-700 hover:border-zinc-600'
-          : 'border-zinc-700/60'
+          ? 'border-gray-200 hover:border-gray-300 hover:shadow-md'
+          : 'border-gray-200 opacity-75'
       }`}
     >
-      {/* Animated top-edge glow for active jobs */}
+      {/* Animated top-edge accent for active jobs */}
       {isActive && (
-        <div className="absolute inset-x-0 top-0 h-px rounded-t-xl bg-gradient-to-r from-transparent via-cyan-400/60 to-transparent" />
+        <div className="absolute inset-x-0 top-0 h-0.5 rounded-t-xl bg-gradient-to-r from-transparent via-cyan-400 to-transparent" />
       )}
 
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          <h3 className="truncate text-sm font-medium text-zinc-100">{title}</h3>
-          <p className="mt-0.5 text-xs text-zinc-500">{timeAgo(created_at)}</p>
+          <h3 className="truncate text-sm font-medium text-gray-900">{title}</h3>
+          <p className="mt-0.5 text-xs text-gray-400">{timeAgo(created_at)}</p>
         </div>
         <StatusBadge status={status} />
       </div>
 
-      {/* Footer row */}
       <div className="mt-3 flex items-center justify-between">
         {isActive && (
-          <p className="flex items-center gap-1.5 text-xs text-cyan-400/80">
-            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
+          <p className="flex items-center gap-1.5 text-xs text-cyan-600">
+            <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-ping" />
             Agents are working…
           </p>
         )}
         {status === 'failed' && (
-          <p className="text-xs text-red-400">Pipeline failed — check worker logs</p>
+          <p className="text-xs text-red-600">Pipeline failed — check worker logs</p>
         )}
         {status === 'completed' && (
           <>
             <span />
             <button
               onClick={() => onViewReport(project_id, title)}
-              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-cyan-500/50 hover:bg-cyan-500/10 hover:text-cyan-400"
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-cyan-400 hover:bg-cyan-50 hover:text-cyan-700"
             >
               View Report →
             </button>

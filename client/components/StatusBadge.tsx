@@ -5,23 +5,23 @@ import { ResearchStatus } from '@/types/research';
 const CONFIG: Record<ResearchStatus, { label: string; classes: string; dot: string }> = {
   pending: {
     label: 'Pending',
-    classes: 'bg-amber-400/10 text-amber-400 ring-amber-400/20',
-    dot: 'bg-amber-400',
+    classes: 'bg-amber-50 text-amber-700 ring-amber-200',
+    dot: 'bg-amber-500',
   },
   in_progress: {
     label: 'Researching',
-    classes: 'bg-cyan-400/10 text-cyan-400 ring-cyan-400/20',
-    dot: 'bg-cyan-400 animate-pulse',
+    classes: 'bg-cyan-50 text-cyan-700 ring-cyan-200',
+    dot: 'bg-cyan-500 animate-pulse',
   },
   completed: {
     label: 'Completed',
-    classes: 'bg-emerald-400/10 text-emerald-400 ring-emerald-400/20',
-    dot: 'bg-emerald-400',
+    classes: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    dot: 'bg-emerald-500',
   },
   failed: {
     label: 'Failed',
-    classes: 'bg-red-400/10 text-red-400 ring-red-400/20',
-    dot: 'bg-red-400',
+    classes: 'bg-red-50 text-red-700 ring-red-200',
+    dot: 'bg-red-500',
   },
 };
 

@@ -1,1 +1,1 @@
-# SynapseGrip server package
+# Cybernetic server package

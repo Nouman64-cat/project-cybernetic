@@ -1,5 +1,5 @@
 """
-SQLModel schemas for SynapseGrip.
+SQLModel schemas for Cybernetic.
 
 Design rules enforced here:
   - Table models (table=True) carry only persistence concerns: PKs, FKs,

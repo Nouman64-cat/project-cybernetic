@@ -1,5 +1,5 @@
 """
-Project-root entry point for the SynapseGrip API server.
+Project-root entry point for the Cybernetic API server.
 
 Run from the project root (project-cybernetic/):
 
@@ -33,7 +33,7 @@ import uvicorn  # noqa: E402 — import after path is set
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SynapseGrip API server")
+    parser = argparse.ArgumentParser(description="Cybernetic API server")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Bind host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=7005,

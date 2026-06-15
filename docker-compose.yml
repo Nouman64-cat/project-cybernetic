@@ -5,9 +5,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: synapticgrip
-      POSTGRES_PASSWORD: synapticgrip
-      POSTGRES_DB: synapticgrip
+      POSTGRES_USER: cybernetic
+      POSTGRES_PASSWORD: cybernetic
+      POSTGRES_DB: cybernetic
     volumes:
       - postgres_data:/var/lib/postgresql/data
     # No host port binding — api and worker reach postgres over the internal
@@ -15,7 +15,7 @@ services:
     # access from your Mac (psql, DBeaver), add:  ports: ["5433:5432"]
     # (5433 avoids clashing with a local postgres on 5432)
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synapticgrip -d synapticgrip"]
+      test: ["CMD-SHELL", "pg_isready -U cybernetic -d cybernetic"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -50,7 +50,7 @@ services:
     env_file:
       - ./server/.env
     environment:
-      DATABASE_URL: postgresql+psycopg2://synapticgrip:synapticgrip@postgres:5432/synapticgrip
+      DATABASE_URL: postgresql+psycopg2://cybernetic:cybernetic@postgres:5432/cybernetic
       REDIS_URL: redis://redis:6379/0
       # Declared here (not only in env_file) so it survives .dockerignore and
       # is always applied even with `docker compose restart` (which skips env_file re-read).
@@ -76,7 +76,7 @@ services:
     env_file:
       - ./server/.env
     environment:
-      DATABASE_URL: postgresql+psycopg2://synapticgrip:synapticgrip@postgres:5432/synapticgrip
+      DATABASE_URL: postgresql+psycopg2://cybernetic:cybernetic@postgres:5432/cybernetic
       REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:

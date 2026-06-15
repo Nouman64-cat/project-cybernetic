@@ -14,7 +14,11 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<ResearchProject[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [modal, setModal] = useState<{ projectId: string; title: string } | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref always holds the current active projects so the interval callback
+  // can read fresh data without being listed as an effect dependency.
+  // This breaks the feedback loop:  poll → setProjects → projects changes
+  // → effect re-runs → clears interval → polls immediately → repeat.
+  const activeProjectsRef = useRef<ResearchProject[]>([]);
 
   // Fetch the full project list from the backend
   const fetchProjects = useCallback(async () => {
@@ -28,8 +32,11 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Poll individual active project statuses and merge updates into state
-  const pollActiveProjects = useCallback(async (active: ResearchProject[]) => {
+  // Poll only active projects and merge updates into state
+  const pollActiveProjects = useCallback(async () => {
+    const active = activeProjectsRef.current;
+    if (active.length === 0) return;
+
     const updates = await Promise.allSettled(
       active.map((p) =>
         api
@@ -49,32 +56,24 @@ export default function Dashboard() {
         (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
       );
     });
-  }, []);
+  }, []); // stable — reads from ref, writes via setProjects functional update
+
+  // Keep the ref in sync with current projects list (no interval side-effects)
+  useEffect(() => {
+    activeProjectsRef.current = projects.filter((p) => ACTIVE.includes(p.status));
+  }, [projects]);
 
   // On mount: load existing projects
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Polling: start when any project is active, stop when all are settled
+  // Single interval created once on mount — fires every 5 s, reads from ref.
+  // Never re-created on state changes so there is exactly one timer at all times.
   useEffect(() => {
-    const active = projects.filter((p) => ACTIVE.includes(p.status));
-
-    if (active.length > 0) {
-      // Poll immediately, then on interval
-      pollActiveProjects(active);
-      intervalRef.current = setInterval(() => pollActiveProjects(active), POLL_INTERVAL_MS);
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    }
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [projects, pollActiveProjects]);
+    const id = setInterval(pollActiveProjects, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [pollActiveProjects]);
 
   function handleSubmitted(project: ResearchProject) {
     // Optimistically prepend the new project before the server confirms
@@ -86,21 +85,20 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="min-h-screen bg-gray-50 text-gray-900">
         {/* ── Header ─────────────────────────────────────────────────────── */}
-        <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-30">
+        <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm sticky top-0 z-30">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
             <div className="flex items-center gap-3">
               <HexLogo />
               <div>
-                <span className="text-base font-bold tracking-tight text-white">SynapseGrip</span>
-                <span className="ml-2 text-xs text-zinc-500">Deep Research Intelligence</span>
+                <span className="text-base font-bold tracking-tight text-gray-900">Cybernetic</span>
+                <span className="ml-2 text-xs text-gray-400">Deep Research Intelligence</span>
               </div>
             </div>
-            {/* Live indicator */}
             {activeCount > 0 && (
-              <div className="flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-400">
-                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <div className="flex items-center gap-2 rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs text-cyan-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-500 animate-pulse" />
                 {activeCount} job{activeCount !== 1 ? 's' : ''} running
               </div>
             )}
@@ -110,9 +108,9 @@ export default function Dashboard() {
         <main className="mx-auto max-w-6xl px-6 py-10 lg:grid lg:grid-cols-[380px_1fr] lg:gap-10 lg:items-start">
           {/* ── Left: form ──────────────────────────────────────────────── */}
           <aside className="lg:sticky lg:top-24">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6">
-              <h2 className="mb-1 text-sm font-semibold text-zinc-100">New Research</h2>
-              <p className="mb-5 text-xs text-zinc-500">
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-1 text-sm font-semibold text-gray-900">New Research</h2>
+              <p className="mb-5 text-xs text-gray-500">
                 Agents will search the web, extract sources, and synthesise a structured report.
               </p>
               <NewResearchForm onSubmitted={handleSubmitted} />
@@ -131,17 +129,17 @@ export default function Dashboard() {
           {/* ── Right: project list ──────────────────────────────────────── */}
           <section>
             <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-zinc-100">
+              <h2 className="text-sm font-semibold text-gray-900">
                 Research Jobs
                 {projects.length > 0 && (
-                  <span className="ml-2 text-zinc-500 font-normal">({projects.length})</span>
+                  <span className="ml-2 text-gray-400 font-normal">({projects.length})</span>
                 )}
               </h2>
             </div>
 
             {loadingProjects ? (
-              <div className="flex items-center justify-center gap-2 py-20 text-zinc-500 text-sm">
-                <svg className="h-5 w-5 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none">
+              <div className="flex items-center justify-center gap-2 py-20 text-gray-400 text-sm">
+                <svg className="h-5 w-5 animate-spin text-cyan-500" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg>
@@ -210,31 +208,31 @@ function Stat({
 }) {
   const valueClass =
     accent === 'cyan'
-      ? 'text-cyan-400'
+      ? 'text-cyan-600'
       : accent === 'emerald'
-      ? 'text-emerald-400'
-      : 'text-zinc-100';
+      ? 'text-emerald-600'
+      : 'text-gray-900';
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-center">
+    <div className="rounded-lg border border-gray-200 bg-white p-3 text-center shadow-sm">
       <p className={`text-xl font-bold ${valueClass}`}>{value}</p>
-      <p className="text-xs text-zinc-500 mt-0.5">{label}</p>
+      <p className="text-xs text-gray-400 mt-0.5">{label}</p>
     </div>
   );
 }
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 py-20 text-center">
-      <div className="rounded-full border border-zinc-700 p-4">
-        <svg className="h-6 w-6 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-gray-200 py-20 text-center">
+      <div className="rounded-full border border-gray-200 bg-white p-4">
+        <svg className="h-6 w-6 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
             d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803 7.5 7.5 0 0015.803 15.803z" />
         </svg>
       </div>
       <div>
-        <p className="text-sm font-medium text-zinc-400">No research jobs yet</p>
-        <p className="text-xs text-zinc-600 mt-1">Submit a question to get started</p>
+        <p className="text-sm font-medium text-gray-500">No research jobs yet</p>
+        <p className="text-xs text-gray-400 mt-1">Submit a question to get started</p>
       </div>
     </div>
   );
