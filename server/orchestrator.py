@@ -27,9 +27,10 @@ STATELESS FACTORY
   teams on every call — no shared mutable state across concurrent invocations.
 """
 
+import json
 import logging
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.base import TaskResult
@@ -42,11 +43,15 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 from .config import settings
 from .tools import extract_page_content, web_search
 
+if TYPE_CHECKING:
+    from .stream import StreamPublisher
+
 logger = logging.getLogger(__name__)
 
 # Sentinel tokens — explicit contracts between agents and termination conditions.
 _FINDINGS_SIGNAL = "FINDINGS_READY"
 _APPROVED_SIGNAL = "RESEARCH_COMPLETE"
+_REVISION_SIGNAL = "REVISION_NEEDED"
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +262,69 @@ def _build_critic_agent(
 # ---------------------------------------------------------------------------
 
 
+async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
+    """
+    Translates a single AutoGen message into a human-readable stream event.
+
+    Uses class-name checks instead of isinstance so we don't need to import
+    every autogen message type (version-proof approach).
+    """
+    msg_class = type(message).__name__
+    source: str = getattr(message, "source", "")
+    content: Any = getattr(message, "content", None)
+
+    # ── Tool call requests (Researcher calling web_search / extract_page_content)
+    if "ToolCallRequestEvent" in msg_class and isinstance(content, list):
+        for call in content:
+            name: str = getattr(call, "name", "")
+            args_raw: Any = getattr(call, "arguments", "{}")
+            try:
+                args: dict = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            except Exception:
+                args = {}
+
+            if name == "web_search":
+                q = args.get("query", "")
+                await publisher.emit("search", f'Searching: "{q}"', source)
+            elif name == "extract_page_content":
+                url: str = args.get("url", "")
+                short = (url[:72] + "…") if len(url) > 72 else url
+                await publisher.emit("extract", f"Reading: {short}", source)
+        return
+
+    # ── Text messages from agents
+    if msg_class != "TextMessage" or not isinstance(content, str) or not content.strip():
+        return
+
+    if source == "ResearcherAgent":
+        # Only emit a summary when the researcher wraps up — not the full findings wall.
+        if _FINDINGS_SIGNAL in content:
+            url_count = len(re.findall(r"https?://", content))
+            await publisher.emit(
+                "phase_end",
+                f"Research compiled — {url_count} source{'s' if url_count != 1 else ''} captured",
+                source,
+            )
+
+    elif source == "SynthesizerAgent":
+        word_count = len(content.split())
+        if word_count > 40:
+            await publisher.emit("writing", f"Writing report… ({word_count} words)", source)
+
+    elif source == "CriticAgent":
+        if _REVISION_SIGNAL in content:
+            # Surface the first numbered issue so the user sees what changed
+            lines = [
+                ln.strip()
+                for ln in content.splitlines()
+                if ln.strip() and ln.strip() != _REVISION_SIGNAL and len(ln.strip()) > 8
+            ]
+            first_issue = lines[0][:120] if lines else "Quality issues found"
+            await publisher.emit("revision", first_issue, source)
+        elif _APPROVED_SIGNAL in content:
+            await publisher.emit("approved", "Report approved ✓", source)
+
+
 def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[str]:
     """Return the last non-empty text message from the named agent."""
     for message in reversed(result.messages):
@@ -298,6 +366,7 @@ async def run_research_orchestration(
     query: str,
     project_id: str,
     max_rounds: int = settings.max_research_rounds,
+    publisher: Optional["StreamPublisher"] = None,
 ) -> str:
     """
     Run the full three-agent pipeline and return the final markdown report.
@@ -346,10 +415,21 @@ async def run_research_orchestration(
         ),
     )
 
-    research_result: TaskResult = await research_team.run(
+    if publisher:
+        await publisher.emit("phase", "Phase 1 — Gathering evidence", "system")
+
+    research_result: Optional[TaskResult] = None
+    async for msg in research_team.run_stream(
         task=research_task,
         cancellation_token=CancellationToken(),
-    )
+    ):
+        if isinstance(msg, TaskResult):
+            research_result = msg
+        elif publisher:
+            await _stream_message(msg, publisher)
+
+    if research_result is None:
+        raise RuntimeError(f"Phase 1 produced no TaskResult | project_id={project_id!r}")
 
     logger.info(
         "Phase 1 complete | project_id=%s | messages=%d | stop=%r",
@@ -397,10 +477,21 @@ async def run_research_orchestration(
         ),
     )
 
-    synthesis_result: TaskResult = await synthesis_team.run(
+    if publisher:
+        await publisher.emit("phase", "Phase 2 — Writing & Review", "system")
+
+    synthesis_result: Optional[TaskResult] = None
+    async for msg in synthesis_team.run_stream(
         task=synthesis_task,
         cancellation_token=CancellationToken(),
-    )
+    ):
+        if isinstance(msg, TaskResult):
+            synthesis_result = msg
+        elif publisher:
+            await _stream_message(msg, publisher)
+
+    if synthesis_result is None:
+        raise RuntimeError(f"Phase 2 produced no TaskResult | project_id={project_id!r}")
 
     logger.info(
         "Phase 2 complete | project_id=%s | messages=%d | stop=%r",
@@ -419,6 +510,9 @@ async def run_research_orchestration(
 
     # Strip any stray sentinel tokens before storing
     final_report = final_report.replace(_APPROVED_SIGNAL, "").strip()
+
+    if publisher:
+        await publisher.emit("complete", "Research complete", "system")
 
     logger.info(
         "Report ready | project_id=%s | chars=%d",

@@ -25,6 +25,7 @@ from .celery_app import celery_app
 from .database import get_session
 from .models import ResearchProject, ResearchReport, ResearchStatus
 from .orchestrator import run_research_orchestration
+from .stream import StreamPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +83,13 @@ async def _async_execute(project_id: str, query: str) -> None:
         session.add(project)
         session.commit()
 
-    # --- Run multi-agent orchestration (raises on hard failure) ---
-    report_content = await run_research_orchestration(
-        query=query,
-        project_id=project_id,
-    )
+    # --- Run multi-agent orchestration with real-time streaming ---
+    async with StreamPublisher(project_id) as publisher:
+        report_content = await run_research_orchestration(
+            query=query,
+            project_id=project_id,
+            publisher=publisher,
+        )
 
     # --- Persist report and mark COMPLETED ---
     with get_session() as session:

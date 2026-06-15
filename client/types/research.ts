@@ -27,3 +27,22 @@ export interface ResearchReport {
   sources: Record<string, string>[];
   created_at: string;
 }
+
+export type StreamEventType =
+  | 'phase'        // phase transition heading
+  | 'search'       // web_search tool call
+  | 'extract'      // extract_page_content tool call
+  | 'phase_end'    // researcher compiled findings
+  | 'writing'      // synthesizer writing draft
+  | 'review'       // critic reviewing
+  | 'revision'     // critic requested revision
+  | 'approved'     // critic approved
+  | 'complete'     // pipeline done
+  | 'error';       // pipeline error
+
+export interface StreamEvent {
+  type: StreamEventType;
+  agent: string;
+  content: string;
+  ts: string;
+}

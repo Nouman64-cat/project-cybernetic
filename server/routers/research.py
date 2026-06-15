@@ -5,12 +5,16 @@ Route handlers are deliberately thin: validate → persist → dispatch → resp
 All pipeline logic lives in tasks.py (Celery) and orchestrator.py (AutoGen).
 """
 
+import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+import redis.asyncio as aioredis
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlmodel import select
 
+from ..config import settings
 from ..database import get_session
 from ..models import (
     ResearchProject,
@@ -177,4 +181,65 @@ async def get_research_report(project_id: str) -> ResearchReportResponse:
         content=report.content,
         sources=json.loads(report.sources_json),
         created_at=report.created_at,
+    )
+
+
+@router.get(
+    "/stream/{project_id}",
+    summary="SSE stream of live agent events",
+    description=(
+        "Server-Sent Events endpoint. Connects and forwards pipeline events "
+        "(tool calls, agent messages, critic reviews) as they happen. "
+        "Emits a 'complete' event when the pipeline finishes, then closes."
+    ),
+)
+async def stream_research_events(project_id: str, request: Request) -> StreamingResponse:
+    """
+    Polls the Redis List written by the Celery worker and forwards each event
+    as an SSE message.  Late-connecting clients receive the full history first,
+    then live updates.  The connection closes on 'complete'/'error' events or
+    after a 10-minute safety timeout.
+    """
+    redis_key = f"research_stream:{project_id}"
+
+    async def generate():
+        client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        cursor = 0
+        deadline = asyncio.get_event_loop().time() + 600  # 10-minute hard cap
+        last_ping = asyncio.get_event_loop().time()
+
+        try:
+            while asyncio.get_event_loop().time() < deadline:
+                if await request.is_disconnected():
+                    break
+
+                # Fetch any events added since last check
+                events = await client.lrange(redis_key, cursor, -1)
+                for raw in events:
+                    yield f"data: {raw}\n\n"
+                    cursor += 1
+                    try:
+                        if json.loads(raw).get("type") in ("complete", "error"):
+                            return
+                    except Exception:
+                        pass
+
+                # Heartbeat comment every 20 s to keep proxies from closing idle conn
+                now = asyncio.get_event_loop().time()
+                if now - last_ping >= 20:
+                    yield ": ping\n\n"
+                    last_ping = now
+
+                await asyncio.sleep(0.35)
+        finally:
+            await client.aclose()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering
+            "Connection": "keep-alive",
+        },
     )

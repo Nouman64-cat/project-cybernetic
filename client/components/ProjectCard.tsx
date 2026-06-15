@@ -2,6 +2,7 @@
 
 import { ResearchProject } from '@/types/research';
 import StatusBadge from './StatusBadge';
+import StreamFeed from './StreamFeed';
 
 interface Props {
   project: ResearchProject;
@@ -45,6 +46,9 @@ export default function ProjectCard({ project, onViewReport }: Props) {
         </div>
         <StatusBadge status={status} />
       </div>
+
+      {/* Live agent feed — shown while the job is running */}
+      <StreamFeed projectId={project_id} active={isActive} />
 
       <div className="mt-3 flex items-center justify-between">
         {isActive && (
