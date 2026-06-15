@@ -35,13 +35,19 @@ def create_db_and_tables() -> None:
     composite type PostgreSQL creates alongside each new table.
     """
     import logging
-    from sqlalchemy.exc import ProgrammingError
+    from sqlalchemy.exc import IntegrityError, ProgrammingError
 
     logger = logging.getLogger(__name__)
     try:
         SQLModel.metadata.create_all(engine)
-    except ProgrammingError as exc:
-        if "already exists" in str(exc.orig):
+    except (ProgrammingError, IntegrityError) as exc:
+        # Two processes racing on startup can collide on the implicit composite
+        # type PostgreSQL creates alongside each new table, raising either a
+        # ProgrammingError ("already exists") or an IntegrityError
+        # (UniqueViolation on pg_type_typname_nsp_index).  Both are safe to
+        # swallow — the table was created by the winning process.
+        msg = str(exc.orig)
+        if "already exists" in msg or "duplicate key" in msg:
             logger.warning("Schema already initialised (concurrent startup race) — skipping.")
         else:
             raise

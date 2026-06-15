@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # --- Orchestration ---
     # Hard ceiling on agent exchanges to prevent runaway loops.
     # Tune upward for complex multi-step research, downward to save tokens.
-    max_research_rounds: int = 12
+    max_research_rounds: int = 20
 
     # --- Tool tunables ---
     # Characters to retain from a fetched page.  4 000 chars ≈ ~1 000 tokens,

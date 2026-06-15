@@ -1,42 +1,30 @@
 """
-Multi-agent research orchestration layer.
+Multi-agent research orchestration — three-agent, two-phase pipeline.
 
-Architecture decisions captured here:
+PHASE 1 — RESEARCH
+  ResearcherAgent runs solo inside its own RoundRobinGroupChat, calling
+  web_search and extract_page_content until it has covered every angle of
+  the topic and emits FINDINGS_READY.  Running it alone prevents the
+  Synthesizer from interrupting before the evidence base is complete.
 
-  STATELESS FACTORY PATTERN
-  -------------------------
-  run_research_orchestration() creates fresh agent and team instances on every
-  call.  There is no shared mutable state between invocations.  This makes the
-  function safe to call concurrently from multiple asyncio tasks (FastAPI
-  background tasks) and trivially parallelisable across Celery workers later —
-  no locking, no session leakage.
+PHASE 2 — SYNTHESIS + CRITIQUE LOOP
+  SynthesizerAgent receives the researcher's compiled findings and writes
+  the full report.  CriticAgent reviews it against strict quality criteria
+  (real URLs, specific data, all sections present, claims grounded in
+  findings).  If the Critic finds issues it returns REVISION_NEEDED with a
+  numbered list of specific fixes.  The Synthesizer revises and resubmits.
+  This continues until the Critic is satisfied and emits RESEARCH_COMPLETE,
+  or until the message cap is reached (safety net).
 
-  TWO-AGENT PIPELINE
-  ------------------
-  ResearcherAgent  — has tools (web_search, extract_page_content).  Gathers
-                     raw facts from the web and compiles cited findings.
-  SynthesizerAgent — no tools.  Receives the researcher's compiled findings
-                     and produces the polished markdown report.
+WHY TWO SEPARATE TEAMS?
+  A single 3-agent RoundRobin (Researcher → Synthesizer → Critic → …) would
+  call the Researcher on every third turn even during the critique loop,
+  wasting tokens on searches that add no value.  Splitting into two teams
+  gives each phase its own termination contract and agent roster.
 
-  Separating these roles prevents a single agent from conflating tool-calling
-  steps with the writing step, which degrades report quality.  The Synthesizer
-  is also cheaper to run (no tool overhead) and can be pointed at a smaller /
-  faster model if cost becomes a concern.
-
-  TERMINATION STRATEGY
-  --------------------
-  Primary:  TextMentionTermination on a sentinel token the Synthesizer must
-            emit at the end of its final message.  This is an explicit contract
-            — not relying on model judgement alone.
-  Fallback: MaxMessageTermination as a hard cap to prevent runaway loops when
-            the model fails to produce the sentinel.
-
-  TEAM ORDERING
-  -------------
-  RoundRobinGroupChat guarantees Researcher → Synthesizer → Researcher → …
-  This prevents the Synthesizer (which has no tools) from being asked to call
-  tools, and ensures the Researcher always hands off findings before the
-  Synthesizer writes the final report.
+STATELESS FACTORY
+  run_research_orchestration() creates fresh clients, tools, agents, and
+  teams on every call — no shared mutable state across concurrent invocations.
 """
 
 import logging
@@ -55,23 +43,17 @@ from .tools import extract_page_content, web_search
 
 logger = logging.getLogger(__name__)
 
-# The Synthesizer must include this exact token at the end of its final message.
-# The TextMentionTermination condition detects it and halts the loop cleanly.
-_TERMINATION_SIGNAL = "RESEARCH_COMPLETE"
+# Sentinel tokens — explicit contracts between agents and termination conditions.
+_FINDINGS_SIGNAL = "FINDINGS_READY"
+_APPROVED_SIGNAL = "RESEARCH_COMPLETE"
 
 
 # ---------------------------------------------------------------------------
-# Private builder helpers — each returns a self-contained, reusable object
+# Private builder helpers
 # ---------------------------------------------------------------------------
 
 
 def _build_model_client() -> OpenAIChatCompletionClient:
-    """
-    Constructs the shared OpenAI client.
-
-    Isolated here so swapping providers (Anthropic, Azure, local Ollama) only
-    touches this one function rather than every agent constructor.
-    """
     return OpenAIChatCompletionClient(
         model=settings.openai_model,
         api_key=settings.openai_api_key,
@@ -79,13 +61,6 @@ def _build_model_client() -> OpenAIChatCompletionClient:
 
 
 def _build_tools() -> list[FunctionTool]:
-    """
-    Wraps async tool callables as AutoGen FunctionTool instances.
-
-    Providing explicit ``description`` strings here rather than relying on
-    docstrings improves tool-selection accuracy because the descriptions are
-    formatted specifically for the model's tool-choice prompt.
-    """
     return [
         FunctionTool(
             func=web_search,
@@ -93,7 +68,8 @@ def _build_tools() -> list[FunctionTool]:
             description=(
                 "Search the public web using DuckDuckGo. "
                 "Returns a list of results with keys: title, href, body. "
-                "Use this first to identify relevant sources on a topic."
+                "The 'href' field is the real URL — always record it. "
+                "Use multiple searches with different query terms to cover all angles."
             ),
         ),
         FunctionTool(
@@ -101,8 +77,9 @@ def _build_tools() -> list[FunctionTool]:
             name="extract_page_content",
             description=(
                 "Fetch a URL and extract its clean text content. "
-                "Use this after web_search to read the full details of a "
-                "promising page. Returns truncated plain text."
+                "Call this on the most relevant URLs from web_search results "
+                "to get the full article text with real data and quotes. "
+                "Returns truncated plain text."
             ),
         ),
     ]
@@ -112,37 +89,51 @@ def _build_researcher_agent(
     model_client: OpenAIChatCompletionClient,
     tools: list[FunctionTool],
 ) -> AssistantAgent:
-    """
-    Builds the information-gathering agent with full tool access.
-
-    The system message encodes a deterministic workflow so the agent does not
-    freestyle — it searches, extracts, compiles, and hands off. This reduces
-    token waste from open-ended exploration.
-    """
     return AssistantAgent(
         name="ResearcherAgent",
         model_client=model_client,
         tools=tools,
         system_message=(
-            "You are a meticulous research analyst with access to web search tools.\n\n"
-            "WORKFLOW — follow this strictly:\n"
-            "1. Issue 2–3 targeted web_search calls to build an overview of the topic.\n"
-            "2. Identify the 3–5 most authoritative or recent URLs from the results.\n"
-            "3. Call extract_page_content on each of those URLs.\n"
-            "4. Compile your findings in the following structured format:\n\n"
-            "   ## RAW FINDINGS\n"
-            "   ### Source: [title](<url>)\n"
-            "   Key points: …\n"
-            "   (repeat for each source)\n\n"
-            "   ## KEY THEMES\n"
-            "   - Theme 1: …\n"
-            "   - Theme 2: …\n\n"
-            "   ## KNOWLEDGE GAPS\n"
-            "   - …\n\n"
-            "5. End your message with 'FINDINGS_READY' so the SynthesizerAgent knows "
-            "to pick up.\n\n"
-            "Do NOT write the final report — that is the Synthesizer's role.\n"
-            "Prioritize recency and source authority.  Cite every URL you used."
+            "You are a meticulous investigative research analyst. Your mission is to build "
+            "a rich, URL-anchored body of evidence on the given topic.\n\n"
+
+            "MANDATORY WORKFLOW — execute every step in order:\n\n"
+
+            "STEP 1 — BROAD SEARCH (issue 3-5 web_search calls with DIFFERENT queries)\n"
+            "  Cover distinct angles, e.g. for 'AI chip supply chain':\n"
+            "    • 'AI chip supply chain bottlenecks 2024'\n"
+            "    • 'NVIDIA TSMC supply shortage response 2024'\n"
+            "    • 'semiconductor shortage geopolitics 2025'\n"
+            "  For EVERY result, copy the exact 'href' value — that is a real URL you must keep.\n\n"
+
+            "STEP 2 — DEEP EXTRACTION (call extract_page_content on 5-8 URLs)\n"
+            "  Choose the most specific/authoritative hrefs from Step 1 results.\n"
+            "  Call extract_page_content on each.\n"
+            "  *** CRITICAL: if extract_page_content returns an error or empty content for "
+            "a URL, do NOT discard that URL. Still add it to RAW FINDINGS using the 'body' "
+            "snippet text from the web_search result as the key points. ***\n\n"
+
+            "STEP 3 — COMPILE STRUCTURED FINDINGS using this EXACT format:\n\n"
+            "  ## RAW FINDINGS\n"
+            "  ### Source: [Exact Page Title](https://exact-href-url.com)\n"
+            "  - Key fact, data point, or quote from this source\n"
+            "  - Another fact (include numbers, dates, percentages)\n"
+            "  (one Source block per URL — minimum 5 blocks)\n\n"
+            "  ## KEY THEMES\n"
+            "  - Theme 1: …\n\n"
+            "  ## DATA POINTS\n"
+            "  - Every number, %, date, or statistic found across all sources\n\n"
+            "  ## KNOWLEDGE GAPS\n"
+            "  - What the sources did not answer\n\n"
+
+            "ABSOLUTE RULES:\n"
+            "  1. Every Source block MUST have the real https?:// URL in the markdown link.\n"
+            "     'Forbes IT Trends' with no URL is forbidden — use the actual href.\n"
+            "  2. Never invent data, quotes, or URLs. Only what your tools returned.\n"
+            "  3. Even search-snippet-only sources are valid — just note '(snippet only)'.\n"
+            "  4. Compile findings once — do not keep looping searches forever.\n\n"
+
+            f"End your compiled findings message with the exact token: {_FINDINGS_SIGNAL}"
         ),
     )
 
@@ -150,43 +141,129 @@ def _build_researcher_agent(
 def _build_synthesizer_agent(
     model_client: OpenAIChatCompletionClient,
 ) -> AssistantAgent:
-    """
-    Builds the writing agent — intentionally given zero tools.
-
-    No tools means no accidental tool-calling during the writing phase, which
-    wastes tokens and can produce malformed reports.  The Synthesizer is a pure
-    reasoning / composition agent.
-    """
     return AssistantAgent(
         name="SynthesizerAgent",
         model_client=model_client,
-        tools=[],  # Explicit empty list — no tools by design.
+        tools=[],
         system_message=(
-            "You are a senior technical writer and analyst. "
-            "You receive structured raw findings from the ResearcherAgent and "
-            "produce a polished, comprehensive markdown research report.\n\n"
+            "You are a senior analyst and technical writer. You receive structured research "
+            "findings from the ResearcherAgent and produce a polished, in-depth markdown report. "
+            "The CriticAgent will review your output and may ask for revisions — address every "
+            "point they raise before resubmitting.\n\n"
+
             "REQUIRED REPORT STRUCTURE:\n"
             "```\n"
-            "# [Descriptive Report Title]\n\n"
+            "# [Descriptive, specific report title]\n\n"
             "## Executive Summary\n"
-            "(2–3 paragraph overview of the topic and key conclusions)\n\n"
+            "3-4 paragraphs synthesising the topic, major findings, and conclusions. "
+            "Reference specific data points from the research.\n\n"
             "## Key Findings\n"
-            "(bullet-point list of the most important facts, one per line)\n\n"
+            "Bulleted list — each bullet must state a specific, sourced fact. "
+            "Include the inline citation: fact ([Source Title](url)).\n\n"
             "## Detailed Analysis\n"
-            "(structured prose with sub-headings as needed)\n\n"
+            "Substantive prose with sub-headings for each major theme. "
+            "Analyse, compare, and interpret — don't just repeat bullet points. "
+            "Every claim must trace to a source from the research findings.\n\n"
             "## Conflicting Information & Knowledge Gaps\n"
-            "(flag anything uncertain, contradictory, or missing from the research)\n\n"
+            "Flag contradictions between sources, uncertain claims, and open questions.\n\n"
             "## Sources\n"
-            "(numbered list of all cited sources as markdown links)\n"
+            "Numbered list of all cited sources as proper markdown links:\n"
+            "1. [Real Page Title](https://real-url.com)\n"
             "```\n\n"
-            "REQUIREMENTS:\n"
-            "- Synthesize, do not just copy-paste.  Add analytical insight.\n"
-            "- Use inline markdown citations: text ([source title](url)).\n"
-            "- Write for a technical audience — precise, concise, no filler.\n"
-            f"- Your final message MUST end with the exact token: {_TERMINATION_SIGNAL}\n\n"
-            "Do NOT call any tools.  Use only the findings provided to you."
+
+            "STRICT RULES:\n"
+            "  - Use ONLY the sources and data from the ResearcherAgent's findings.\n"
+            "  - Every source in the Sources section MUST be a proper markdown link: "
+            "    [Title](https://real-url.com). The URLs come from the researcher's RAW "
+            "    FINDINGS blocks — copy them exactly as provided.\n"
+            "  - If the researcher marked a source '(snippet only)', still cite it with "
+            "    its URL — snippet-based citations are valid.\n"
+            "  - NEVER say 'data limitations' or 'cannot include sources'. If the "
+            "    researcher found even one real URL, you must cite it.\n"
+            "  - Include specific numbers, dates, and quotes from the findings.\n"
+            "  - Write for a sophisticated technical audience — precise, no filler.\n"
+            "  - Do NOT call any tools.\n"
+            "  - When the CriticAgent returns REVISION_NEEDED, address EVERY numbered "
+            "    point explicitly in your revision. Do not skip any.\n\n"
+
+            "Your final approved message does NOT need any special token — "
+            "the CriticAgent will emit RESEARCH_COMPLETE when satisfied."
         ),
     )
+
+
+def _build_critic_agent(
+    model_client: OpenAIChatCompletionClient,
+) -> AssistantAgent:
+    return AssistantAgent(
+        name="CriticAgent",
+        model_client=model_client,
+        tools=[],
+        system_message=(
+            "You are a rigorous research quality auditor. Your role is to review research "
+            "reports written by the SynthesizerAgent and enforce strict quality standards "
+            "before the report is published. You do NOT rewrite the report — you give "
+            "specific, numbered feedback for the Synthesizer to act on.\n\n"
+
+            "REVIEW CHECKLIST — evaluate every item strictly:\n\n"
+
+            "★ ZERO-TOLERANCE RULE (check this first):\n"
+            "   Count the markdown links in the Sources section that start with http.\n"
+            "   If the count is ZERO — return REVISION_NEEDED immediately, no exceptions.\n"
+            "   If the Sources section says anything like 'cannot include citations' or "
+            "   'data limitations' — return REVISION_NEEDED immediately.\n"
+            "   The ResearcherAgent always finds real URLs via web_search; the Synthesizer "
+            "   has them in the provided findings and must use them.\n\n"
+
+            "1. REAL CITATIONS (minimum 3)\n"
+            "   Every Sources entry must be [Title](https://...). Count real http URLs.\n"
+            "   If fewer than 3, that is grounds for REVISION_NEEDED.\n\n"
+
+            "2. INLINE CITATIONS\n"
+            "   Claims in the body must have ([Source Title](url)) citations inline.\n"
+            "   Unsourced assertions throughout the body → REVISION_NEEDED.\n\n"
+
+            "3. DATA DEPTH\n"
+            "   Must contain specific facts: numbers, percentages, dates, quotes.\n"
+            "   Vague qualitative-only claims → REVISION_NEEDED.\n\n"
+
+            "4. SECTION COMPLETENESS\n"
+            "   All five sections present and substantive: Executive Summary (3+ paragraphs), "
+            "   Key Findings (5+ bullets with citations), Detailed Analysis (multi-section "
+            "   with real content), Conflicting Info & Gaps, Sources.\n\n"
+
+            "5. ANALYSIS QUALITY\n"
+            "   Detailed Analysis must interpret and synthesise — not repeat Key Findings.\n\n"
+
+            "RESPONSE FORMAT:\n\n"
+            "If ALL criteria are met (including ≥3 real http URLs in Sources):\n"
+            "  Write a one-sentence approval then on a new line: RESEARCH_COMPLETE\n\n"
+            "If ANY criterion fails:\n"
+            "  Start with: REVISION_NEEDED\n"
+            "  Give a numbered list of specific, actionable fixes, e.g.:\n"
+            "  1. Sources section has 0 real URLs. The research findings contain these "
+            "     URLs: [list them]. Add them as markdown links.\n"
+            "  2. Paragraph 3 of Executive Summary cites no source inline.\n\n"
+            "Do NOT rewrite the report. Do NOT call any tools."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helper
+# ---------------------------------------------------------------------------
+
+
+def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[str]:
+    """Return the last non-empty text message from the named agent."""
+    for message in reversed(result.messages):
+        if (
+            getattr(message, "source", None) == agent_name
+            and isinstance(getattr(message, "content", None), str)
+            and message.content.strip()
+        ):
+            return message.content.strip()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -200,25 +277,22 @@ async def run_research_orchestration(
     max_rounds: int = settings.max_research_rounds,
 ) -> str:
     """
-    Run the full Researcher → Synthesizer pipeline and return the markdown report.
+    Run the full three-agent pipeline and return the final markdown report.
 
-    This function is intentionally stateless.  Every call builds its own model
-    client, tool wrappers, agents, and team.  No cross-call shared state means:
-      - Concurrent FastAPI background tasks are safe without locks.
-      - Future Celery workers can call this in separate processes with no IPC.
-      - Test isolation is trivial — each test call is fully independent.
+    Stateless: every call builds fresh agents and teams — safe for concurrent
+    Celery workers with no locking or session leakage.
 
     Args:
-        query:      The user's research question or topic string.
-        project_id: Used only for structured logging; not mutated here.
-        max_rounds: Hard upper bound on total agent messages (safety net).
+        query:       The user's research question or topic.
+        project_id:  Used for structured logging only — not mutated here.
+        max_rounds:  Hard message cap for Phase 1 (research).  Phase 2 uses
+                     a fixed 10-message cap (5 Synthesizer + 5 Critic turns).
 
     Returns:
-        The final synthesized markdown report as a plain string.
+        The final synthesized and critic-approved markdown report.
 
     Raises:
-        RuntimeError: When the loop ends (max_rounds or unexpected early stop)
-                      without the Synthesizer producing a valid report.
+        RuntimeError: When a phase ends without producing the expected output.
     """
     logger.info(
         "Orchestration start | project_id=%s | model=%s | max_rounds=%d | query=%r",
@@ -230,54 +304,85 @@ async def run_research_orchestration(
 
     researcher = _build_researcher_agent(model_client, tools)
     synthesizer = _build_synthesizer_agent(model_client)
+    critic = _build_critic_agent(model_client)
 
-    # OR-combined termination: whichever fires first wins.
-    # The signal-based condition is the happy path; the round cap is the safety net.
-    termination = (
-        TextMentionTermination(_TERMINATION_SIGNAL)
-        | MaxMessageTermination(max_rounds)
+    # ── Phase 1: Research ────────────────────────────────────────────────────
+
+    research_task = (
+        f"Conduct thorough, multi-angle research on the following topic:\n\n"
+        f"RESEARCH TOPIC: {query}\n\n"
+        "Use multiple distinct search queries, extract content from at least 5 real URLs, "
+        "and compile your findings in the required structured format defined in your "
+        "system instructions. Signal completion when your findings are ready."
     )
 
-    team = RoundRobinGroupChat(
-        participants=[researcher, synthesizer],
-        termination_condition=termination,
+    research_team = RoundRobinGroupChat(
+        participants=[researcher],
+        termination_condition=(
+            TextMentionTermination(_FINDINGS_SIGNAL) | MaxMessageTermination(max_rounds)
+        ),
     )
 
-    task_message = (
-        f"Research the following topic thoroughly and produce a comprehensive report:\n\n"
-        f"TOPIC: {query}\n\n"
-        "Start with web searches, extract key sources, compile structured findings, "
-        "then hand off to the SynthesizerAgent."
-    )
-
-    result: TaskResult = await team.run(
-        task=task_message,
+    research_result: TaskResult = await research_team.run(
+        task=research_task,
         cancellation_token=CancellationToken(),
     )
 
     logger.info(
-        "Orchestration ended | project_id=%s | stop_reason=%r | messages=%d",
-        project_id, result.stop_reason, len(result.messages),
+        "Phase 1 complete | project_id=%s | messages=%d | stop=%r",
+        project_id, len(research_result.messages), research_result.stop_reason,
     )
 
-    # Extract the last substantive SynthesizerAgent text message.
-    # Iterating in reverse means we get the most recent synthesis attempt,
-    # which handles the max_rounds fallback case gracefully.
-    final_report: Optional[str] = None
-
-    for message in reversed(result.messages):
-        is_synthesizer = getattr(message, "source", None) == "SynthesizerAgent"
-        content = getattr(message, "content", None)
-        if is_synthesizer and isinstance(content, str) and content.strip():
-            # Strip the termination sentinel before storing/returning
-            final_report = content.replace(_TERMINATION_SIGNAL, "").strip()
-            break
-
-    if final_report is None:
+    findings = _extract_last_agent_text(research_result, "ResearcherAgent")
+    if not findings:
         raise RuntimeError(
-            f"Orchestration for project_id={project_id!r} produced no final report. "
-            f"stop_reason={result.stop_reason!r}, total_messages={len(result.messages)}"
+            f"ResearcherAgent produced no findings | project_id={project_id!r} | "
+            f"stop_reason={research_result.stop_reason!r}"
         )
+
+    # ── Phase 2: Synthesize + Critique loop ──────────────────────────────────
+
+    synthesis_task = (
+        "The ResearcherAgent has completed their investigation. "
+        "Here are their full structured findings:\n\n"
+        f"{findings}\n\n"
+        "---\n"
+        "SynthesizerAgent: Write the comprehensive research report using ONLY the real "
+        "URLs and data from the findings above. Do not invent any sources or statistics.\n\n"
+        "CriticAgent: After the Synthesizer produces the report, review it against all "
+        "quality criteria per your system instructions and either approve it or return "
+        "specific revision requests."
+    )
+
+    synthesis_team = RoundRobinGroupChat(
+        participants=[synthesizer, critic],
+        termination_condition=(
+            TextMentionTermination(_APPROVED_SIGNAL) | MaxMessageTermination(10)
+        ),
+    )
+
+    synthesis_result: TaskResult = await synthesis_team.run(
+        task=synthesis_task,
+        cancellation_token=CancellationToken(),
+    )
+
+    logger.info(
+        "Phase 2 complete | project_id=%s | messages=%d | stop=%r",
+        project_id, len(synthesis_result.messages), synthesis_result.stop_reason,
+    )
+
+    # The final report is the last substantive SynthesizerAgent message.
+    # When the Critic approves, it emits RESEARCH_COMPLETE — the Synthesizer's
+    # preceding message is the clean, approved report.
+    final_report = _extract_last_agent_text(synthesis_result, "SynthesizerAgent")
+    if not final_report:
+        raise RuntimeError(
+            f"SynthesizerAgent produced no report | project_id={project_id!r} | "
+            f"stop_reason={synthesis_result.stop_reason!r}"
+        )
+
+    # Strip any stray sentinel tokens before storing
+    final_report = final_report.replace(_APPROVED_SIGNAL, "").strip()
 
     logger.info(
         "Report ready | project_id=%s | chars=%d",
