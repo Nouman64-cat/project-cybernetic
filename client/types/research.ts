@@ -29,16 +29,19 @@ export interface ResearchReport {
 }
 
 export type StreamEventType =
-  | 'phase'        // phase transition heading
-  | 'search'       // web_search tool call
-  | 'extract'      // extract_page_content tool call
-  | 'phase_end'    // researcher compiled findings
-  | 'writing'      // synthesizer writing draft
-  | 'review'       // critic reviewing
-  | 'revision'     // critic requested revision
-  | 'approved'     // critic approved
-  | 'complete'     // pipeline done
-  | 'error';       // pipeline error
+  | 'phase'           // phase transition heading
+  | 'search'          // web_search tool call
+  | 'extract'         // extract_page_content tool call
+  | 'phase_end'       // researcher compiled findings
+  | 'draft_preview'   // synthesizer draft: first 38 words + word count
+  | 'critic_feedback' // critic full revision notes
+  | 'approved'        // critic approved
+  | 'complete'        // pipeline done
+  | 'error'           // pipeline error
+  // legacy aliases kept for backwards compat with any cached streams
+  | 'writing'
+  | 'revision'
+  | 'review';
 
 export interface StreamEvent {
   type: StreamEventType;

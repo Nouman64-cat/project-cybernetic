@@ -361,20 +361,20 @@ async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
     elif source == "SynthesizerAgent":
         word_count = len(content.split())
         if word_count > 40:
-            await publisher.emit("writing", f"Writing report… ({word_count} words)", source)
+            preview = " ".join(content.split()[:38]) + "…"
+            await publisher.emit(
+                "draft_preview",
+                f"{preview} · {word_count:,} words",
+                source,
+            )
 
     elif source == "CriticAgent":
         if _REVISION_SIGNAL in content:
-            # Surface the first numbered issue so the user sees what changed
-            lines = [
-                ln.strip()
-                for ln in content.splitlines()
-                if ln.strip() and ln.strip() != _REVISION_SIGNAL and len(ln.strip()) > 8
-            ]
-            first_issue = lines[0][:120] if lines else "Quality issues found"
-            await publisher.emit("revision", first_issue, source)
+            clean = content.replace(_REVISION_SIGNAL, "").strip()
+            feedback = clean[:480] if len(clean) > 480 else clean
+            await publisher.emit("critic_feedback", feedback, source)
         elif _APPROVED_SIGNAL in content:
-            await publisher.emit("approved", "Report approved ✓", source)
+            await publisher.emit("approved", "Report approved — all quality criteria met", source)
 
 
 def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[str]:
