@@ -28,6 +28,7 @@ STATELESS FACTORY
 """
 
 import logging
+import re
 from typing import Optional
 
 from autogen_agentchat.agents import AssistantAgent
@@ -173,13 +174,15 @@ def _build_synthesizer_agent(
 
             "STRICT RULES:\n"
             "  - Use ONLY the sources and data from the ResearcherAgent's findings.\n"
-            "  - Every source in the Sources section MUST be a proper markdown link: "
-            "    [Title](https://real-url.com). The URLs come from the researcher's RAW "
-            "    FINDINGS blocks — copy them exactly as provided.\n"
-            "  - If the researcher marked a source '(snippet only)', still cite it with "
-            "    its URL — snippet-based citations are valid.\n"
-            "  - NEVER say 'data limitations' or 'cannot include sources'. If the "
-            "    researcher found even one real URL, you must cite it.\n"
+            "  - Every source in the Sources section MUST be a proper markdown link.\n"
+            "    CORRECT:   `1. [Page Title](https://example.com/article)`\n"
+            "    WRONG:     `1. Page Title`  ← missing URL, always rejected by Critic\n"
+            "    The task message contains an 'EXTRACTED SOURCE URLs' block with every "
+            "    real URL the researcher found — copy them verbatim into your Sources.\n"
+            "  - Inline citations in the body use the same format: "
+            "    `([Page Title](https://example.com/article))`\n"
+            "  - NEVER say 'data limitations' or 'cannot include sources'. You have real "
+            "    URLs in the task message — use them.\n"
             "  - Include specific numbers, dates, and quotes from the findings.\n"
             "  - Write for a sophisticated technical audience — precise, no filler.\n"
             "  - Do NOT call any tools.\n"
@@ -266,6 +269,26 @@ def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[st
     return None
 
 
+def _build_url_manifest(findings: str) -> str:
+    """
+    Extract every [Title](url) pair from the researcher's findings and format
+    them as an explicit numbered list to hand to the Synthesizer.
+
+    The Synthesizer repeatedly drops URLs when it has to find them itself in a
+    wall of findings text.  Pre-extracting them and presenting them as a tidy
+    list in the task message eliminates that failure mode entirely.
+    """
+    pairs = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)', findings)
+    if not pairs:
+        return ""
+    lines = [f"{i}. [{title}]({url})" for i, (title, url) in enumerate(pairs[:12], 1)]
+    return (
+        "\n\nEXTRACTED SOURCE URLs (copy these exactly into your Sources section):\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -340,15 +363,28 @@ async def run_research_orchestration(
             f"stop_reason={research_result.stop_reason!r}"
         )
 
+    # Pre-extract real URLs so the Synthesizer gets them served up explicitly.
+    # Without this, the Synthesizer consistently drops the href when writing
+    # the Sources section — it copies the title but not the link.
+    url_manifest = _build_url_manifest(findings)
+    url_count = len(re.findall(r'\[.+?\]\(https?://[^\)]+\)', findings))
+    logger.info(
+        "Phase 1 URL count | project_id=%s | real_urls_found=%d",
+        project_id, url_count,
+    )
+
     # ── Phase 2: Synthesize + Critique loop ──────────────────────────────────
 
     synthesis_task = (
         "The ResearcherAgent has completed their investigation. "
         "Here are their full structured findings:\n\n"
-        f"{findings}\n\n"
+        f"{findings}"
+        f"{url_manifest}\n"
         "---\n"
         "SynthesizerAgent: Write the comprehensive research report using ONLY the real "
-        "URLs and data from the findings above. Do not invent any sources or statistics.\n\n"
+        "URLs and data from the findings above. The 'EXTRACTED SOURCE URLs' block above "
+        "lists every real URL the researcher found — copy them exactly into your Sources "
+        "section as numbered markdown links: `1. [Title](https://url)`.\n\n"
         "CriticAgent: After the Synthesizer produces the report, review it against all "
         "quality criteria per your system instructions and either approve it or return "
         "specific revision requests."
