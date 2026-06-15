@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments — never copy into the image
+server/.venv/
+.venv/
+venv/
+env/
+
+# Node / Next.js — not needed in the server image
+client/
+node_modules/
+.next/
+
+# Dev artefacts
+*.db
+*.sqlite
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# Sensitive files — use env_file in docker-compose instead
+.env
+.env.*
+!.env.example

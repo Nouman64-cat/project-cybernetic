@@ -1,0 +1,107 @@
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapticgrip
+      POSTGRES_PASSWORD: synapticgrip
+      POSTGRES_DB: synapticgrip
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No host port binding — api and worker reach postgres over the internal
+    # Docker network using the service name "postgres".  If you need direct
+    # access from your Mac (psql, DBeaver), add:  ports: ["5433:5432"]
+    # (5433 avoids clashing with a local postgres on 5432)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapticgrip -d synapticgrip"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ── Redis (Celery broker + result backend) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Using 6380 on the host to avoid clashing with a locally running Redis.
+    # Containers talk to each other on 6379 via the internal network.
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── FastAPI API server ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "7005:7005"
+    # env_file loads the server/.env for secrets (OPENAI_API_KEY, etc.)
+    # The environment block then overrides the DB/Redis URLs with
+    # container-internal hostnames — values here always win over env_file.
+    env_file:
+      - ./server/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://synapticgrip:synapticgrip@postgres:5432/synapticgrip
+      REDIS_URL: redis://redis:6379/0
+      # Declared here (not only in env_file) so it survives .dockerignore and
+      # is always applied even with `docker compose restart` (which skips env_file re-read).
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:3001"]'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Celery worker ────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    # Overrides the Dockerfile CMD — same image, different process.
+    command: >
+      celery -A server.celery_app worker
+      --loglevel=info
+      --concurrency=2
+      --queues=research
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://synapticgrip:synapticgrip@postgres:5432/synapticgrip
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Flower (Celery monitoring UI) ────────────────────────────────────────────
+  # Uncomment to enable the Flower dashboard at http://localhost:5555
+  # flower:
+  #   build:
+  #     context: .
+  #     dockerfile: server/Dockerfile
+  #   command: celery -A server.celery_app flower --port=5555
+  #   ports:
+  #     - "5555:5555"
+  #   env_file:
+  #     - ./server/.env
+  #   environment:
+  #     REDIS_URL: redis://redis:6379/0
+  #   depends_on:
+  #     - redis
+  #     - worker
+
+volumes:
+  postgres_data:
+    # Named volume: persists database data across `docker compose down` restarts.
+    # Use `docker compose down -v` to wipe it completely (destructive).
