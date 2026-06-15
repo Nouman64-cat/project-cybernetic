@@ -112,6 +112,15 @@ def _build_researcher_agent(
             "    • 'semiconductor shortage geopolitics 2025'\n"
             "  For EVERY result, copy the exact 'href' value — that is a real URL you must keep.\n\n"
 
+            "STEP 1.5 — ENTITY DEEP-DIVE (2-3 targeted searches on specific named entities)\n"
+            "  After Step 1, scan your results for specific named entities:\n"
+            "  companies (e.g. NVIDIA, Intel, TSMC), projects (e.g. Llama 3, WebAssembly WASI),\n"
+            "  tools/runtimes, products, standards bodies, or key organizations.\n"
+            "  Run 2-3 additional web_search calls focused on those specific names, e.g.:\n"
+            "    • 'NVIDIA H100 production volume yield rate 2024 statistics'\n"
+            "    • 'TSMC 3nm CoWoS-L advanced packaging capacity numbers'\n"
+            "  This ensures the Synthesizer has concrete entity-level data, not just themes.\n\n"
+
             "STEP 2 — DEEP EXTRACTION (call extract_page_content on 5-8 URLs)\n"
             "  Choose the most specific/authoritative hrefs from Step 1 results.\n"
             "  Call extract_page_content on each.\n"
@@ -120,21 +129,30 @@ def _build_researcher_agent(
             "snippet text from the web_search result as the key points. ***\n\n"
 
             "STEP 3 — COMPILE STRUCTURED FINDINGS using this EXACT format:\n\n"
-            "  ## RAW FINDINGS\n"
+            "  ## RAW FINDINGS\n\n"
             "  ### Source: [Exact Page Title](https://exact-href-url.com)\n"
+            "  URL: https://exact-href-url.com\n"
             "  - Key fact, data point, or quote from this source\n"
             "  - Another fact (include numbers, dates, percentages)\n"
-            "  (one Source block per URL — minimum 5 blocks)\n\n"
+            "  (one Source block per URL — MINIMUM 5 blocks)\n\n"
+            "  CRITICAL URL FORMATTING RULES:\n"
+            "  ✓ CORRECT:  ### Source: [Page Title](https://full-url.com/path)\n"
+            "  ✗ WRONG:    ### Source: Page Title  ← NO URL attached!\n"
+            "  ✗ WRONG:    ### Source: Page Title (https://url.com)  ← not markdown!\n"
+            "  Every source header must use [brackets](parentheses) markdown link syntax.\n"
+            "  Also write the URL on its own line 'URL: https://...' as backup.\n\n"
             "  ## KEY THEMES\n"
             "  - Theme 1: …\n\n"
             "  ## DATA POINTS\n"
             "  - Every number, %, date, or statistic found across all sources\n\n"
+            "  ## NAMED ENTITIES FOUND\n"
+            "  - List every company, project, tool, org, or standard mentioned\n\n"
             "  ## KNOWLEDGE GAPS\n"
             "  - What the sources did not answer\n\n"
 
             "ABSOLUTE RULES:\n"
-            "  1. Every Source block MUST have the real https?:// URL in the markdown link.\n"
-            "     'Forbes IT Trends' with no URL is forbidden — use the actual href.\n"
+            "  1. Every Source block MUST use the real href as a markdown link AND on its\n"
+            "     own 'URL: https://...' line. Both formats required for redundancy.\n"
             "  2. Never invent data, quotes, or URLs. Only what your tools returned.\n"
             "  3. Even search-snippet-only sources are valid — just note '(snippet only)'.\n"
             "  4. Compile findings once — do not keep looping searches forever.\n\n"
@@ -176,6 +194,16 @@ def _build_synthesizer_agent(
             "Numbered list of all cited sources as proper markdown links:\n"
             "1. [Real Page Title](https://real-url.com)\n"
             "```\n\n"
+
+            "MINIMUM DEPTH REQUIREMENTS (non-negotiable — Critic will reject anything below these):\n"
+            "  • Total word count: minimum 2,000 words (aim for 2,500+)\n"
+            "  • Named entities: ≥ 8 specific named companies, projects, tools, or organizations\n"
+            "    mentioned by name with specific facts attached to each\n"
+            "  • Executive Summary: minimum 4 full paragraphs covering scope, key findings,\n"
+            "    technical implications, and conclusions\n"
+            "  • Detailed Analysis: minimum 4 sub-headings (###), each with ≥ 2 full paragraphs\n"
+            "  • Key Findings: minimum 8 bullets, each with a specific fact + inline citation\n"
+            "  A short or sparse report WILL be rejected. Write comprehensively.\n\n"
 
             "STRICT RULES:\n"
             "  - Use ONLY the sources and data from the ResearcherAgent's findings.\n"
@@ -223,6 +251,30 @@ def _build_critic_agent(
             "   The ResearcherAgent always finds real URLs via web_search; the Synthesizer "
             "   has them in the provided findings and must use them.\n\n"
 
+            "QUANTITATIVE GATES (check in order — fail on the first gate that is not met):\n\n"
+
+            "  GATE A — REPORT DEPTH (visual check, not word count)\n"
+            "   Count the number of paragraphs in the Executive Summary.\n"
+            "   Count the number of ### sub-headings in the Detailed Analysis.\n"
+            "   Count the number of bullets in Key Findings.\n"
+            "   If Executive Summary has fewer than 3 paragraphs → REVISION_NEEDED.\n"
+            "   If Detailed Analysis has fewer than 3 ### sub-headings → REVISION_NEEDED.\n"
+            "   If Key Findings has fewer than 6 bullets → REVISION_NEEDED.\n"
+            "   State exactly what is missing, e.g. '1. Executive Summary has 2 paragraphs "
+            "(need ≥ 3). Detailed Analysis has 2 sub-headings (need ≥ 3).'\n\n"
+
+            "  GATE B — NAMED ENTITIES\n"
+            "   Count distinct named companies, projects, tools, standards, or organizations "
+            "   mentioned by name (e.g. NVIDIA, PyTorch, WASI, W3C, Bytecode Alliance).\n"
+            "   If fewer than 5 distinct named entities → REVISION_NEEDED.\n"
+            "   State: 'Only X named entities found. Add specific company/project/tool names "
+            "with concrete facts about each.'\n\n"
+
+            "  GATE C — SECTION DEPTH\n"
+            "   Check: Executive Summary has ≥ 3 paragraphs; Detailed Analysis has ≥ 3 "
+            "   sub-headings (### lines); each sub-section has ≥ 2 paragraphs.\n"
+            "   If any of these fail → REVISION_NEEDED with specific section name.\n\n"
+
             "1. REAL CITATIONS (minimum 3)\n"
             "   Every Sources entry must be [Title](https://...). Count real http URLs.\n"
             "   If fewer than 3, that is grounds for REVISION_NEEDED.\n\n"
@@ -244,14 +296,14 @@ def _build_critic_agent(
             "   Detailed Analysis must interpret and synthesise — not repeat Key Findings.\n\n"
 
             "RESPONSE FORMAT:\n\n"
-            "If ALL criteria are met (including ≥3 real http URLs in Sources):\n"
+            "If ALL gates and criteria are met:\n"
             "  Write a one-sentence approval then on a new line: RESEARCH_COMPLETE\n\n"
-            "If ANY criterion fails:\n"
+            "If ANY gate or criterion fails:\n"
             "  Start with: REVISION_NEEDED\n"
             "  Give a numbered list of specific, actionable fixes, e.g.:\n"
-            "  1. Sources section has 0 real URLs. The research findings contain these "
-            "     URLs: [list them]. Add them as markdown links.\n"
-            "  2. Paragraph 3 of Executive Summary cites no source inline.\n\n"
+            "  1. Report is ~850 words — must reach ≥ 2,000. Expand all sections.\n"
+            "  2. Sources section has 0 real URLs. Add them as markdown links.\n"
+            "  3. Detailed Analysis has only 1 sub-section — needs ≥ 3.\n\n"
             "Do NOT rewrite the report. Do NOT call any tools."
         ),
     )
@@ -339,17 +391,31 @@ def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[st
 
 def _build_url_manifest(findings: str) -> str:
     """
-    Extract every [Title](url) pair from the researcher's findings and format
-    them as an explicit numbered list to hand to the Synthesizer.
+    Extract every URL from the researcher's findings and format them as an
+    explicit numbered list for the Synthesizer.
 
-    The Synthesizer repeatedly drops URLs when it has to find them itself in a
-    wall of findings text.  Pre-extracting them and presenting them as a tidy
-    list in the task message eliminates that failure mode entirely.
+    Captures both markdown-linked URLs [Title](url) AND bare https:// URLs that
+    the researcher may have written outside markdown syntax.  De-duplicated and
+    capped at 15 entries.
     """
-    pairs = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)', findings)
+    pairs: list[tuple[str, str]] = re.findall(
+        r'\[([^\]]{1,120})\]\((https?://[^\)\s]{10,})\)', findings
+    )
+    seen: set[str] = {url for _, url in pairs}
+
+    # Also grab bare https:// URLs the researcher wrote outside of markdown links
+    for url in re.findall(r'(?<!\()(https?://[^\s\)\]>",]{10,})', findings):
+        url = url.rstrip('.,;:')
+        if url not in seen:
+            # Derive a short label from the domain + first path segment
+            label = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
+            pairs.append((label, url))
+            seen.add(url)
+
     if not pairs:
         return ""
-    lines = [f"{i}. [{title}]({url})" for i, (title, url) in enumerate(pairs[:12], 1)]
+
+    lines = [f"{i}. [{title}]({url})" for i, (title, url) in enumerate(pairs[:15], 1)]
     return (
         "\n\nEXTRACTED SOURCE URLs (copy these exactly into your Sources section):\n"
         + "\n".join(lines)
@@ -378,7 +444,7 @@ async def run_research_orchestration(
         query:       The user's research question or topic.
         project_id:  Used for structured logging only — not mutated here.
         max_rounds:  Hard message cap for Phase 1 (research).  Phase 2 uses
-                     a fixed 10-message cap (5 Synthesizer + 5 Critic turns).
+                     a fixed 16-message cap (up to 8 Synthesizer + 8 Critic turns).
 
     Returns:
         The final synthesized and critic-approved markdown report.
@@ -448,9 +514,10 @@ async def run_research_orchestration(
     # the Sources section — it copies the title but not the link.
     url_manifest = _build_url_manifest(findings)
     url_count = len(re.findall(r'\[.+?\]\(https?://[^\)]+\)', findings))
+    findings_words = len(findings.split())
     logger.info(
-        "Phase 1 URL count | project_id=%s | real_urls_found=%d",
-        project_id, url_count,
+        "Phase 1 URL count | project_id=%s | real_urls_found=%d | findings_words=%d",
+        project_id, url_count, findings_words,
     )
 
     # ── Phase 2: Synthesize + Critique loop ──────────────────────────────────
@@ -461,6 +528,14 @@ async def run_research_orchestration(
         f"{findings}"
         f"{url_manifest}\n"
         "---\n"
+        f"The researcher compiled approximately {findings_words} words of evidence "
+        f"across {url_count} sources. Your final report MUST be at least 2,000 words "
+        "(aim for 2,500+). A 600-word summary is NOT acceptable — that is a failure.\n\n"
+        "Word budget guide:\n"
+        "  • Executive Summary alone: 400–500 words (4 full paragraphs)\n"
+        "  • Detailed Analysis: 1,000–1,200 words across 4+ sub-sections (### headings)\n"
+        "    Each sub-section needs at least 2 full paragraphs of real analysis\n"
+        "  • Key Findings: 8–10 bullets, each with a specific fact + inline citation\n\n"
         "SynthesizerAgent: Write the comprehensive research report using ONLY the real "
         "URLs and data from the findings above. The 'EXTRACTED SOURCE URLs' block above "
         "lists every real URL the researcher found — copy them exactly into your Sources "
@@ -473,7 +548,7 @@ async def run_research_orchestration(
     synthesis_team = RoundRobinGroupChat(
         participants=[synthesizer, critic],
         termination_condition=(
-            TextMentionTermination(_APPROVED_SIGNAL) | MaxMessageTermination(10)
+            TextMentionTermination(_APPROVED_SIGNAL) | MaxMessageTermination(16)
         ),
     )
 
@@ -510,6 +585,78 @@ async def run_research_orchestration(
 
     # Strip any stray sentinel tokens before storing
     final_report = final_report.replace(_APPROVED_SIGNAL, "").strip()
+
+    # ── Programmatic length gate ─────────────────────────────────────────────
+    # LLMs cannot reliably count words, so we enforce minimum length in code.
+    # If the report is under 1,500 words, run one targeted expansion pass.
+    report_word_count = len(final_report.split())
+    logger.info(
+        "Phase 2 word count | project_id=%s | words=%d",
+        project_id, report_word_count,
+    )
+
+    if report_word_count < 1500:
+        logger.warning(
+            "Report too short — forcing expansion | project_id=%s | words=%d",
+            project_id, report_word_count,
+        )
+        if publisher:
+            await publisher.emit(
+                "revision",
+                f"Report is {report_word_count} words — expanding to 2,500+ (automatic)",
+                "system",
+            )
+
+        # Run a FRESH Synthesizer SOLO (no Critic) for the expansion pass.
+        # A Synthesizer+Critic loop causes a shortening spiral — Critic demands
+        # make the Synthesizer trim rather than expand on each revision.
+        # MaxMessageTermination(2) = task(1) + one Synthesizer response(1); avoids
+        # the second shorter follow-up message that MaxMessageTermination(3) triggers.
+        # Fresh agent avoids AutoGen runtime state leakage from Phase 2.
+        expansion_task = (
+            f"Your previous report was only {report_word_count} words — this is not enough.\n"
+            "Write a new, full-length version at 2,500+ words from the researcher's findings below.\n\n"
+            "WORD BUDGET — write AT LEAST this much per section:\n"
+            "  ## Executive Summary          500+ words   (4+ full paragraphs)\n"
+            "  ## Key Findings               300+ words   (10+ bullets with inline citations)\n"
+            "  ## Detailed Analysis        1,200+ words   (5+ ### sub-sections, 2+ paragraphs each)\n"
+            "  ## Conflicting Info & Gaps    200+ words   (2+ paragraphs)\n"
+            "  ## Sources                    numbered list of all cited sources as markdown links\n\n"
+            "Do NOT copy the short draft — write fresh, elaborate prose for every section.\n"
+            "Name specific companies, projects, tools, and organizations throughout.\n"
+            "Every factual claim needs an inline citation ([Source Title](url)).\n\n"
+            "RESEARCHER'S FULL FINDINGS:\n\n"
+            f"{findings}"
+            f"{url_manifest}\n"
+        )
+
+        fresh_synthesizer = _build_synthesizer_agent(model_client)
+        expansion_team = RoundRobinGroupChat(
+            participants=[fresh_synthesizer],
+            termination_condition=MaxMessageTermination(2),
+        )
+
+        expansion_result: Optional[TaskResult] = None
+        async for msg in expansion_team.run_stream(
+            task=expansion_task,
+            cancellation_token=CancellationToken(),
+        ):
+            if isinstance(msg, TaskResult):
+                expansion_result = msg
+            elif publisher:
+                await _stream_message(msg, publisher)
+
+        if expansion_result is not None:
+            expanded = _extract_last_agent_text(expansion_result, fresh_synthesizer.name)
+            if expanded:
+                expanded = expanded.replace(_APPROVED_SIGNAL, "").strip()
+                expanded_wc = len(expanded.split())
+                logger.info(
+                    "Expansion complete | project_id=%s | words=%d → %d",
+                    project_id, report_word_count, expanded_wc,
+                )
+                if expanded_wc > report_word_count:
+                    final_report = expanded
 
     if publisher:
         await publisher.emit("complete", "Research complete", "system")

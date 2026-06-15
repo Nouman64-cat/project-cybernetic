@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     max_research_rounds: int = 20
 
     # --- Tool tunables ---
-    # Characters to retain from a fetched page.  4 000 chars ≈ ~1 000 tokens,
-    # a safe budget that preserves signal without blowing the context window.
-    content_truncation_chars: int = 4_000
+    # Characters to retain from a fetched page.  8 000 chars ≈ ~2 000 tokens,
+    # giving the Synthesizer richer per-source material to write longer reports.
+    content_truncation_chars: int = 8_000
 
     # --- CORS ---
     cors_origins: list[str] = ["http://localhost:3000"]

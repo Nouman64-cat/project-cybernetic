@@ -34,7 +34,7 @@ _NOISE_TAGS: tuple[str, ...] = (
 
 async def web_search(
     query: str,
-    max_results: int = 5,
+    max_results: int = 8,
 ) -> list[dict[str, Any]]:
     """
     Search the web using DuckDuckGo and return structured results.
