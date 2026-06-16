@@ -41,7 +41,7 @@ from autogen_core.tools import FunctionTool
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 from .config import settings
-from .tools import extract_page_content, web_search
+from .tools import extract_page_content, search_academic_papers, web_search
 
 if TYPE_CHECKING:
     from .stream import StreamPublisher
@@ -49,9 +49,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Sentinel tokens — explicit contracts between agents and termination conditions.
-_FINDINGS_SIGNAL = "FINDINGS_READY"
-_APPROVED_SIGNAL = "RESEARCH_COMPLETE"
-_REVISION_SIGNAL = "REVISION_NEEDED"
+_FINDINGS_SIGNAL   = "FINDINGS_READY"
+_APPROVED_SIGNAL   = "RESEARCH_COMPLETE"
+_REVISION_SIGNAL   = "REVISION_NEEDED"
+_CITATIONS_SIGNAL  = "CITATIONS_READY"
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +156,9 @@ def _build_researcher_agent(
             "     own 'URL: https://...' line. Both formats required for redundancy.\n"
             "  2. Never invent data, quotes, or URLs. Only what your tools returned.\n"
             "  3. Even search-snippet-only sources are valid — just note '(snippet only)'.\n"
-            "  4. Compile findings once — do not keep looping searches forever.\n\n"
+            "  4. Compile findings once — do not keep looping searches forever.\n"
+            "  5. ENGLISH ONLY: Skip any result whose title or URL is in Chinese, Japanese,\n"
+            "     Korean, or any non-English language. Use the next English-language result.\n\n"
 
             f"End your compiled findings message with the exact token: {_FINDINGS_SIGNAL}"
         ),
@@ -309,6 +312,95 @@ def _build_critic_agent(
     )
 
 
+def _build_citation_tools() -> list[FunctionTool]:
+    return [
+        FunctionTool(
+            func=search_academic_papers,
+            name="search_academic_papers",
+            description=(
+                "Search the Semantic Scholar academic database for peer-reviewed papers "
+                "and preprints. Returns structured metadata: title, authors, year, "
+                "journal/venue, DOI, arXiv ID, URL, and an open-access PDF URL where "
+                "available. Call this 2-3 times with different query terms to maximise coverage."
+            ),
+        ),
+        FunctionTool(
+            func=extract_page_content,
+            name="extract_page_content",
+            description=(
+                "Fetch a URL and extract its clean text. Use on open_access_url values "
+                "(arXiv, PubMed, etc.) to confirm paper details like page numbers or "
+                "conference name before citing. Returns truncated plain text."
+            ),
+        ),
+    ]
+
+
+def _build_citation_agent(
+    model_client: OpenAIChatCompletionClient,
+    tools: list[FunctionTool],
+) -> AssistantAgent:
+    return AssistantAgent(
+        name="CitationAgent",
+        model_client=model_client,
+        tools=tools,
+        system_message=(
+            "You are an academic librarian and citation specialist. Your task is to find "
+            "the most relevant peer-reviewed academic papers for a given research topic "
+            "and produce Harvard-style citations.\n\n"
+
+            "WORKFLOW — follow every step:\n"
+            "STEP 1 — Call search_academic_papers 2-3 times with DIFFERENT query terms "
+            "to maximise paper discovery. Examples for 'AI in healthcare':\n"
+            "  • 'artificial intelligence healthcare diagnosis clinical'\n"
+            "  • 'deep learning medical imaging radiology'\n"
+            "  • 'large language models clinical decision support'\n\n"
+            "STEP 2 — For any paper with an open_access_url (arXiv, PubMed Central), "
+            "optionally call extract_page_content on 1-2 of them to verify page numbers "
+            "or conference venue details before citing.\n\n"
+            "STEP 3 — Select the 6-10 most relevant papers and format Harvard citations.\n\n"
+
+            "HARVARD CITATION FORMAT:\n\n"
+            "Journal article:\n"
+            "  Last, F.I. and Last, F.I. (Year) 'Title of article', *Journal Name*, "
+            "Volume(Issue), pp. X–Y. doi:DOI.\n\n"
+            "Conference paper:\n"
+            "  Last, F.I. (Year) 'Title', in *Proceedings of Conference Name*, pp. X–Y.\n\n"
+            "ArXiv preprint:\n"
+            "  Last, F.I. et al. (Year) 'Title', *arXiv preprint*, arXiv:XXXX.XXXXX. "
+            "Available at: https://arxiv.org/abs/XXXX.XXXXX\n\n"
+            "No date:\n"
+            "  Last, F.I. (n.d.) 'Title', *Source*.\n\n"
+
+            "AUTHOR FORMATTING RULES:\n"
+            "  • 1 author:   Last, F.I.\n"
+            "  • 2-3 authors: Last, F.I., Last, F.I. and Last, F.I.\n"
+            "  • 4+ authors: Last, F.I. et al.\n"
+            "  • Use only the FIRST initial of each forename: 'John Andrew Smith' → 'Smith, J.A.'\n\n"
+
+            "OUTPUT — produce this exact structure:\n"
+            "```\n"
+            "## Academic References (Harvard Style)\n\n"
+            "*The following peer-reviewed papers and preprints are directly relevant to "
+            "this research topic. Open-access versions are linked where available.*\n\n"
+            "1. Last, F.I. (Year) 'Title', *Journal*, Vol(No.), pp. X–Y. doi:DOI.\n"
+            "2. ...\n"
+            "```\n\n"
+            "After your citation list, add a brief note on accessibility:\n"
+            "**Note:** List which citations are freely accessible (arXiv, PubMed Central, "
+            "institutional open access) and which may require library or institutional access.\n\n"
+
+            f"End your complete output with the exact token: {_CITATIONS_SIGNAL}\n\n"
+
+            "STRICT RULES:\n"
+            "  - Only cite papers whose title and authors were returned by search_academic_papers.\n"
+            "  - Do NOT invent or guess DOIs, page numbers, or author initials.\n"
+            "  - If a field is missing, omit it rather than fabricating it.\n"
+            "  - Do not call web_search — use only search_academic_papers and extract_page_content."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
@@ -325,7 +417,7 @@ async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
     source: str = getattr(message, "source", "")
     content: Any = getattr(message, "content", None)
 
-    # ── Tool call requests (Researcher calling web_search / extract_page_content)
+    # ── Tool call requests
     if "ToolCallRequestEvent" in msg_class and isinstance(content, list):
         for call in content:
             name: str = getattr(call, "name", "")
@@ -342,6 +434,9 @@ async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
                 url: str = args.get("url", "")
                 short = (url[:72] + "…") if len(url) > 72 else url
                 await publisher.emit("extract", f"Reading: {short}", source)
+            elif name == "search_academic_papers":
+                q = args.get("query", "")
+                await publisher.emit("citation_search", f'Academic search: "{q}"', source)
         return
 
     # ── Text messages from agents
@@ -349,7 +444,6 @@ async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
         return
 
     if source == "ResearcherAgent":
-        # Only emit a summary when the researcher wraps up — not the full findings wall.
         if _FINDINGS_SIGNAL in content:
             url_count = len(re.findall(r"https?://", content))
             await publisher.emit(
@@ -375,6 +469,20 @@ async def _stream_message(message: Any, publisher: "StreamPublisher") -> None:
             await publisher.emit("critic_feedback", feedback, source)
         elif _APPROVED_SIGNAL in content:
             await publisher.emit("approved", "Report approved — all quality criteria met", source)
+
+    elif source == "CitationAgent":
+        if _CITATIONS_SIGNAL in content:
+            citation_count = len(re.findall(r"^\d+\.", content, re.MULTILINE))
+            await publisher.emit(
+                "citations_ready",
+                f"{citation_count} Harvard-style academic citation{'s' if citation_count != 1 else ''} added",
+                source,
+            )
+        else:
+            word_count = len(content.split())
+            if word_count > 20:
+                preview = " ".join(content.split()[:30]) + "…"
+                await publisher.emit("citation_found", preview, source)
 
 
 def _extract_last_agent_text(result: TaskResult, agent_name: str) -> Optional[str]:
@@ -657,6 +765,52 @@ async def run_research_orchestration(
                 )
                 if expanded_wc > report_word_count:
                     final_report = expanded
+
+    # ── Phase 3: Academic Citations ──────────────────────────────────────────
+
+    citation_tools = _build_citation_tools()
+    citation_agent = _build_citation_agent(model_client, citation_tools)
+
+    citation_team = RoundRobinGroupChat(
+        participants=[citation_agent],
+        termination_condition=(
+            TextMentionTermination(_CITATIONS_SIGNAL) | MaxMessageTermination(8)
+        ),
+    )
+
+    citation_task = (
+        f"Find and cite the most relevant academic papers for this research topic:\n\n"
+        f"RESEARCH TOPIC: {query}\n\n"
+        "Search the Semantic Scholar database with 2-3 different query variations. "
+        "Select the 6-10 most relevant peer-reviewed papers or preprints and produce "
+        "Harvard-style citations. Aim for a mix of foundational papers and recent work (2020+)."
+    )
+
+    if publisher:
+        await publisher.emit("phase", "Phase 3 — Academic Citations", "system")
+
+    citation_result: Optional[TaskResult] = None
+    async for msg in citation_team.run_stream(
+        task=citation_task,
+        cancellation_token=CancellationToken(),
+    ):
+        if isinstance(msg, TaskResult):
+            citation_result = msg
+        elif publisher:
+            await _stream_message(msg, publisher)
+
+    logger.info(
+        "Phase 3 complete | project_id=%s | messages=%d",
+        project_id,
+        len(citation_result.messages) if citation_result else 0,
+    )
+
+    if citation_result:
+        citations_text = _extract_last_agent_text(citation_result, "CitationAgent")
+        if citations_text:
+            citations_clean = citations_text.replace(_CITATIONS_SIGNAL, "").strip()
+            if citations_clean:
+                final_report = final_report + "\n\n---\n\n" + citations_clean
 
     if publisher:
         await publisher.emit("complete", "Research complete", "system")

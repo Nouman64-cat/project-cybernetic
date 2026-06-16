@@ -45,6 +45,7 @@ export default function Sidebar({ view, onViewChange, activeCount }: Props) {
             { label: 'Researcher', bg: 'bg-blue-500', short: 'R' },
             { label: 'Synthesizer', bg: 'bg-violet-500', short: 'S' },
             { label: 'Critic', bg: 'bg-amber-500', short: 'C' },
+            { label: 'Citations', bg: 'bg-indigo-500', short: '🎓' },
           ].map(({ label, bg, short }) => (
             <div key={short} className="flex items-center gap-2">
               <div className={`h-4 w-4 rounded-full ${bg} flex items-center justify-center text-[8px] font-bold text-white`}>

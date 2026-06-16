@@ -6,7 +6,7 @@ import { renderMarkdownInline } from '@/lib/markdown';
 
 const SERVER = process.env.NEXT_PUBLIC_SERVER_URL ?? 'http://localhost:7005';
 
-type AgentKey = 'ResearcherAgent' | 'SynthesizerAgent' | 'CriticAgent';
+type AgentKey = 'ResearcherAgent' | 'SynthesizerAgent' | 'CriticAgent' | 'CitationAgent';
 type AgentStatus = 'idle' | 'active' | 'done';
 
 interface AgentState {
@@ -58,12 +58,24 @@ const AGENT_META: Record<AgentKey, {
     bubbleBorder: 'border-amber-200',
     labelColor: 'text-amber-700',
   },
+  CitationAgent: {
+    label: 'Citations',
+    short: 'Ci',
+    emoji: '🎓',
+    bg: 'bg-indigo-500',
+    ring: 'ring-indigo-300',
+    glow: 'shadow-indigo-300',
+    bubbleBg: 'bg-indigo-50',
+    bubbleBorder: 'border-indigo-200',
+    labelColor: 'text-indigo-600',
+  },
 };
 
 const INITIAL_STATES: Record<AgentKey, AgentState> = {
   ResearcherAgent: { status: 'idle', bubble: '' },
   SynthesizerAgent: { status: 'idle', bubble: '' },
   CriticAgent: { status: 'idle', bubble: '' },
+  CitationAgent: { status: 'idle', bubble: '' },
 };
 
 interface Props {
@@ -73,13 +85,16 @@ interface Props {
 
 export default function AgentStage({ projectId, onComplete }: Props) {
   const [agents, setAgents] = useState<Record<AgentKey, AgentState>>(INITIAL_STATES);
-  const [phase, setPhase] = useState<1 | 2>(1);
+  const [phase, setPhase] = useState<1 | 2 | 3>(1);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [done, setDone] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  function setAgent(key: AgentKey, patch: Partial<AgentState>) {
-    setAgents((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
+  function setAgent(key: AgentKey, patch: Partial<AgentState> | ((prev: AgentState) => AgentState)) {
+    setAgents((prev) => ({
+      ...prev,
+      [key]: typeof patch === 'function' ? patch(prev[key]) : { ...prev[key], ...patch },
+    }));
   }
 
   function truncate(s: string, n = 70) {
@@ -100,18 +115,26 @@ export default function AgentStage({ projectId, onComplete }: Props) {
         const { type, content } = ev;
 
         if (type === 'phase') {
-          if (content.toLowerCase().includes('1')) {
+          if (content.includes('1')) {
             setPhase(1);
             setAgent('ResearcherAgent', { status: 'active', bubble: 'Starting research…' });
-          } else if (content.toLowerCase().includes('2')) {
+          } else if (content.includes('2')) {
             setPhase(2);
             setAgent('ResearcherAgent', { status: 'done', bubble: 'Findings compiled ✓' });
             setAgent('SynthesizerAgent', { status: 'active', bubble: 'Writing report…' });
+          } else if (content.includes('3')) {
+            setPhase(3);
+            setAgent('SynthesizerAgent', { status: 'done', bubble: '' });
+            setAgent('CriticAgent', { status: 'done', bubble: '' });
+            setAgent('CitationAgent', { status: 'active', bubble: 'Searching academic databases…' });
           }
         } else if (type === 'search') {
           setAgent('ResearcherAgent', { status: 'active', bubble: 'Searching: ' + truncate(content, 55) });
         } else if (type === 'extract') {
-          setAgent('ResearcherAgent', { status: 'active', bubble: 'Reading: ' + truncate(content, 57) });
+          // Could be Researcher or CitationAgent reading a paper
+          setAgent('ResearcherAgent', (prev) =>
+            prev.status === 'active' ? { ...prev, bubble: 'Reading: ' + truncate(content, 55) } : prev
+          );
         } else if (type === 'phase_end') {
           setAgent('ResearcherAgent', { status: 'done', bubble: content || 'Research compiled ✓' });
         } else if (type === 'draft_preview') {
@@ -123,10 +146,17 @@ export default function AgentStage({ projectId, onComplete }: Props) {
         } else if (type === 'approved') {
           setAgent('CriticAgent', { status: 'done', bubble: 'Approved ✓' });
           setAgent('SynthesizerAgent', { status: 'done', bubble: 'Report complete ✓' });
+        } else if (type === 'citation_search') {
+          setAgent('CitationAgent', { status: 'active', bubble: truncate(content, 65) });
+        } else if (type === 'citation_found') {
+          setAgent('CitationAgent', { status: 'active', bubble: truncate(content, 65) });
+        } else if (type === 'citations_ready') {
+          setAgent('CitationAgent', { status: 'done', bubble: content });
         } else if (type === 'complete') {
           setAgent('ResearcherAgent', { status: 'done', bubble: '' });
           setAgent('SynthesizerAgent', { status: 'done', bubble: '' });
           setAgent('CriticAgent', { status: 'done', bubble: '' });
+          setAgent('CitationAgent', { status: 'done', bubble: '' });
           setDone(true);
           es.close();
           onComplete?.();
@@ -158,22 +188,30 @@ export default function AgentStage({ projectId, onComplete }: Props) {
         <div className="contents">
           <AgentCard agentId="ResearcherAgent" state={agents.ResearcherAgent} />
 
-          {/* R → S handoff arrow */}
-          <div className={`flex flex-col items-center justify-center pt-8 gap-1 transition-opacity duration-500 ${phase === 2 ? 'opacity-80' : 'opacity-20'}`}>
-            <div className="h-px w-10 bg-gray-300" />
+          {/* R → S handoff */}
+          <div className={`flex flex-col items-center justify-center pt-8 gap-1 transition-opacity duration-500 ${phase >= 2 ? 'opacity-80' : 'opacity-20'}`}>
+            <div className="h-px w-8 bg-gray-300" />
             <span className="text-[11px] text-gray-400">→</span>
           </div>
 
           <AgentCard agentId="SynthesizerAgent" state={agents.SynthesizerAgent} />
 
-          {/* S ⇄ C back-and-forth connector */}
-          <div className={`flex flex-col items-center justify-center pt-8 gap-1 transition-opacity duration-500 ${phase === 2 ? 'opacity-100' : 'opacity-0'}`}>
-            <div className="h-px w-10 bg-gray-300" />
+          {/* S ⇄ C back-and-forth */}
+          <div className={`flex flex-col items-center justify-center pt-8 gap-1 transition-opacity duration-500 ${phase === 2 ? 'opacity-100' : 'opacity-20'}`}>
+            <div className="h-px w-8 bg-gray-300" />
             <span className="text-gray-400 text-sm">⇄</span>
-            <div className="h-px w-10 bg-gray-300" />
+            <div className="h-px w-8 bg-gray-300" />
           </div>
 
           <AgentCard agentId="CriticAgent" state={agents.CriticAgent} />
+
+          {/* C → Citations handoff */}
+          <div className={`flex flex-col items-center justify-center pt-8 gap-1 transition-opacity duration-500 ${phase === 3 ? 'opacity-80' : 'opacity-20'}`}>
+            <div className="h-px w-8 bg-gray-300" />
+            <span className="text-[11px] text-gray-400">→</span>
+          </div>
+
+          <AgentCard agentId="CitationAgent" state={agents.CitationAgent} />
         </div>
       </div>
 
@@ -361,6 +399,30 @@ function EventRow({ ev, draftIdx }: { ev: StreamEvent; draftIdx: number }) {
       <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
         <span className="text-emerald-500 text-sm">✓</span>
         <span className="text-[11px] text-emerald-700 font-medium">{content}</span>
+      </div>
+    );
+  }
+  if (type === 'citation_search') {
+    return (
+      <div className="flex items-center gap-2 pl-4">
+        <span className="text-[11px] text-indigo-400 font-mono">🎓</span>
+        <span className="text-[11px] text-gray-500 truncate">{content}</span>
+      </div>
+    );
+  }
+  if (type === 'citation_found') {
+    return (
+      <div className="flex items-center gap-2 pl-4">
+        <span className="text-[11px] text-indigo-300 font-mono">📄</span>
+        <span className="text-[11px] text-gray-400 truncate italic">{content}</span>
+      </div>
+    );
+  }
+  if (type === 'citations_ready') {
+    return (
+      <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2">
+        <span className="text-indigo-500 text-sm">🎓</span>
+        <span className="text-[11px] text-indigo-700 font-semibold">{content}</span>
       </div>
     );
   }

@@ -16,6 +16,7 @@ Design principles enforced here:
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
@@ -55,7 +56,32 @@ async def web_search(
 
     def _blocking_search() -> list[dict[str, Any]]:
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+            results = list(ddgs.text(query, region="us-en", max_results=max_results + 4))
+
+        # Drop non-English pages by filtering out known CJK/non-English domains
+        # and results whose titles contain CJK Unicode characters.
+        _skip_domains = (
+            "zhihu.com", "csdn.net", "cnblogs.com", "baidu.com",
+            "163.com", "juejin.cn", "jianshu.com", "bilibili.com",
+            "zhuanlan.zhihu.com", "weixin.qq.com", "qq.com",
+            "naver.com", "blog.naver.com", "tistory.com",
+            "qiita.com", "zenn.dev", "hatena.ne.jp",
+        )
+
+        def _is_english(r: dict) -> bool:
+            href = r.get("href", "")
+            title = r.get("title", "") or r.get("body", "")
+            if any(d in href for d in _skip_domains):
+                return False
+            # Detect CJK block characters in the title
+            if any("一" <= ch <= "鿿" or
+                   "぀" <= ch <= "ヿ" or
+                   "가" <= ch <= "힯" for ch in title):
+                return False
+            return True
+
+        filtered = [r for r in results if _is_english(r)]
+        return filtered[:max_results]
 
     try:
         loop = asyncio.get_event_loop()
@@ -68,6 +94,69 @@ async def web_search(
     except Exception as exc:
         logger.error("web_search failed | query=%r | error=%s", query, exc)
         return [{"error": f"Search failed: {exc}", "query": query, "href": "", "body": ""}]
+
+
+async def search_academic_papers(
+    query: str,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """
+    Search the Semantic Scholar Graph API for academic papers.
+
+    Semantic Scholar is free and requires no API key for basic usage.
+    Returns structured metadata: title, authors, year, journal/venue, DOI,
+    arXiv ID, Semantic Scholar URL, and an open-access PDF URL where available.
+
+    Args:
+        query:  The search query (topic, keywords, or author+title).
+        limit:  Max results to return (1-10, hard-capped at 10 by the API).
+
+    Returns:
+        List of paper dicts. Each has: title, authors (list), year, journal,
+        venue, doi, arxiv_id, url, open_access_url, abstract (first 300 chars).
+        Returns a single error-dict on failure so the agent can continue.
+    """
+    endpoint = "https://api.semanticscholar.org/graph/v1/paper/search"
+    params = {
+        "query": query,
+        "limit": min(max(1, limit), 10),
+        "fields": "title,authors,year,journal,venue,externalIds,url,openAccessPdf,abstract",
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=6.0, read=20.0, write=5.0, pool=5.0),
+            headers={"User-Agent": "Cybernetic-Research-Bot/1.0"},
+        ) as client:
+            resp = await client.get(endpoint, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        papers: list[dict[str, Any]] = []
+        for p in data.get("data", []):
+            ext = p.get("externalIds") or {}
+            jrn = p.get("journal") or {}
+            oa  = p.get("openAccessPdf") or {}
+            papers.append({
+                "title":            p.get("title", ""),
+                "authors":          [a.get("name", "") for a in (p.get("authors") or [])],
+                "year":             p.get("year"),
+                "journal":          jrn.get("name", ""),
+                "journal_volume":   jrn.get("volume", ""),
+                "journal_pages":    jrn.get("pages", ""),
+                "venue":            p.get("venue", ""),
+                "doi":              ext.get("DOI", ""),
+                "arxiv_id":         ext.get("ArXiv", ""),
+                "url":              p.get("url", ""),
+                "open_access_url":  oa.get("url", ""),
+                "abstract":         (p.get("abstract") or "")[:300],
+            })
+
+        logger.debug("search_academic_papers: %d results for query=%r", len(papers), query)
+        return papers
+
+    except Exception as exc:
+        logger.error("search_academic_papers failed | query=%r | error=%s", query, exc)
+        return [{"error": f"Academic search failed: {exc}", "query": query}]
 
 
 async def extract_page_content(url: str) -> str:
